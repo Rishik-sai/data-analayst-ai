@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Send, Bot, User, BrainCircuit } from 'lucide-react';
+import { Send, Bot, User, BrainCircuit, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
+import { useStore } from '../store/useStore';
 
 interface Message {
   id: string;
@@ -17,23 +18,51 @@ export function Chat() {
     }
   ]);
   const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const activeDatasetId = useStore(state => state.activeDatasetId);
 
-  const handleSend = (e: React.FormEvent) => {
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() || isLoading) return;
 
-    const newMsg: Message = { id: Date.now().toString(), role: 'user', content: input };
+    const userMessage = input;
+    const newMsg: Message = { id: Date.now().toString(), role: 'user', content: userMessage };
     setMessages(prev => [...prev, newMsg]);
     setInput('');
+    setIsLoading(true);
     
-    // Simulate AI response
-    setTimeout(() => {
+    try {
+      const response = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: userMessage,
+          dataset_id: activeDatasetId
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response');
+      }
+
+      const data = await response.json();
+      
       setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
+        id: Date.now().toString(),
         role: 'assistant',
-        content: "I'm currently running in mockup mode, but when the backend is connected, I will analyze your data and respond to that."
+        content: data.response
       }]);
-    }, 1000);
+    } catch (error) {
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: "Sorry, I couldn't connect to the backend. Please ensure the backend server is running."
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -70,6 +99,17 @@ export function Chat() {
             </div>
           </div>
         ))}
+        {isLoading && (
+          <div className="flex gap-4 max-w-[85%]">
+            <div className="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center mt-1 bg-primary text-primary-foreground">
+              <Bot className="w-5 h-5" />
+            </div>
+            <div className="p-4 rounded-2xl bg-secondary border border-border text-foreground rounded-tl-sm flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-primary" />
+              <span className="text-sm text-foreground/70">Analyzing...</span>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="p-4 border-t border-border bg-card/50">
@@ -83,7 +123,7 @@ export function Chat() {
           />
           <button 
             type="submit"
-            disabled={!input.trim()}
+            disabled={!input.trim() || isLoading}
             className="absolute right-2 p-2.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Send className="w-5 h-5 ml-0.5" />

@@ -9,19 +9,30 @@ import os
 import uuid
 import json
 
+from sqlalchemy import func
 from database.session import get_db
-from database.models import User, Dataset, AnalysisHistory, MLModel
+from database.models import User, Dataset, AnalysisHistory, ChatHistory, MLModel
 from database.schemas import (
     DatasetResponse, DatasetPreview, AnalyzeRequest, AnalysisResponse,
     ChatRequest, ChatResponse, VisualizeRequest, VisualizationResponse,
-    TrainModelRequest, ModelResponse, ReportResponse
+    TrainModelRequest, ModelResponse, ReportResponse, DashboardStats,
+    RecentActivity, UserResponse
 )
 from auth import get_current_user
 from config import settings
 from tools.analysis_tools import load_dataset, get_dataset_overview, clean_dataset, perform_eda, generate_chart_data
 from tools.ml_tools import train_classification_model, train_regression_model, train_clustering_model, save_model
+from agents.crew import AnalysisCrew, get_llm
+from langchain_core.messages import SystemMessage, HumanMessage
 
 router = APIRouter()
+
+# ─── Users ─────────────────────────────────────────────────────
+
+@router.get("/users/me", response_model=UserResponse)
+def get_me(current_user: User = Depends(get_current_user)):
+    """Get current authenticated user details."""
+    return current_user
 
 # ─── Datasets ──────────────────────────────────────────────────
 
@@ -68,6 +79,78 @@ async def upload_dataset(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/dashboard/stats", response_model=DashboardStats)
+def get_dashboard_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get statistics for the dashboard."""
+    total_datasets = db.query(Dataset).filter(Dataset.owner_id == current_user.id).count()
+    analyses_run = db.query(AnalysisHistory).join(Dataset).filter(Dataset.owner_id == current_user.id).count()
+    models_trained = db.query(MLModel).join(Dataset).filter(Dataset.owner_id == current_user.id).count()
+    
+    # Calculate storage
+    total_bytes = db.query(func.sum(Dataset.file_size)).filter(Dataset.owner_id == current_user.id).scalar() or 0
+    if total_bytes < 1024 * 1024:
+        storage_str = f"{total_bytes / 1024:.1f} KB"
+    elif total_bytes < 1024 * 1024 * 1024:
+        storage_str = f"{total_bytes / (1024 * 1024):.1f} MB"
+    else:
+        storage_str = f"{total_bytes / (1024 * 1024 * 1024):.1f} GB"
+        
+    return DashboardStats(
+        total_datasets=total_datasets,
+        analyses_run=analyses_run,
+        models_trained=models_trained,
+        storage_used=storage_str
+    )
+
+@router.get("/dashboard/recent-activity", response_model=List[RecentActivity])
+def get_recent_activity(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get recent activity across all user assets."""
+    activities = []
+    
+    # Get recent datasets
+    datasets = db.query(Dataset).filter(Dataset.owner_id == current_user.id).order_by(Dataset.created_at.desc()).limit(5).all()
+    for d in datasets:
+        activities.append({
+            "id": d.id,
+            "activity_type": "dataset",
+            "description": f"Uploaded dataset '{d.name}'",
+            "status": d.status,
+            "created_at": d.created_at
+        })
+        
+    # Get recent analyses
+    # Analyses are tied to datasets, so we join on dataset owner
+    analyses = db.query(AnalysisHistory).join(Dataset).filter(Dataset.owner_id == current_user.id).order_by(AnalysisHistory.created_at.desc()).limit(5).all()
+    for a in analyses:
+        activities.append({
+            "id": a.id,
+            "activity_type": "analysis",
+            "description": f"Ran {a.analysis_type} analysis on '{a.dataset.name}'",
+            "status": a.status,
+            "created_at": a.created_at
+        })
+        
+    # Get recent models
+    models = db.query(MLModel).join(Dataset).filter(Dataset.owner_id == current_user.id).order_by(MLModel.created_at.desc()).limit(5).all()
+    for m in models:
+        activities.append({
+            "id": m.id,
+            "activity_type": "model",
+            "description": f"Trained {m.model_type} model on '{m.dataset.name}'",
+            "status": m.status,
+            "created_at": m.created_at
+        })
+        
+    # Sort all combined activities by created_at descending and take top 10
+    activities.sort(key=lambda x: x["created_at"], reverse=True)
+    return activities[:10]
+
 @router.get("/datasets", response_model=List[DatasetResponse])
 def get_datasets(
     db: Session = Depends(get_db),
@@ -103,6 +186,36 @@ def preview_dataset(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/datasets/{dataset_id}")
+def delete_dataset(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a dataset and all associated records."""
+    from database.models import AnalysisHistory, ChatHistory, Report, MLModel
+    
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id, Dataset.owner_id == current_user.id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+        
+    # Manually delete dependent records
+    db.query(AnalysisHistory).filter(AnalysisHistory.dataset_id == dataset.id).delete()
+    db.query(ChatHistory).filter(ChatHistory.dataset_id == dataset.id).delete()
+    db.query(Report).filter(Report.dataset_id == dataset.id).delete()
+    db.query(MLModel).filter(MLModel.dataset_id == dataset.id).delete()
+    
+    # Try to delete the file
+    if os.path.exists(dataset.file_path):
+        try:
+            os.remove(dataset.file_path)
+        except Exception as e:
+            pass # Continue even if file delete fails
+            
+    db.delete(dataset)
+    db.commit()
+    return {"message": "Dataset deleted successfully"}
 
 # ─── Analysis ──────────────────────────────────────────────────
 
@@ -145,12 +258,19 @@ async def analyze_dataset(
             # Step 2: EDA
             eda_res = perform_eda(cleaned_df)
             
-            # We would invoke CrewAI here, but passing the pandas operations results directly for now
-            # To avoid huge LLM wait times in this template
+            # Invoke CrewAI for deep analysis
+            dataset_info = f"Dataset size: {cleaned_df.shape[0]} rows, {cleaned_df.shape[1]} columns. Columns: {', '.join(cleaned_df.columns)}"
+            crew = AnalysisCrew(dataset_info=dataset_info, analysis_type=db_analysis.analysis_type)
+            
+            crew_report = crew.run_full_analysis(
+                cleaning_report=json.dumps(clean_res["report"]),
+                eda_results=json.dumps(eda_res)
+            )
             
             db_analysis.result = {
                 "cleaning": clean_res["report"],
-                "eda": eda_res
+                "eda": eda_res,
+                "crew_report": str(crew_report)
             }
             db_analysis.status = "completed"
             bg_db.commit()
@@ -164,6 +284,54 @@ async def analyze_dataset(
     background_tasks.add_task(run_analysis_task, analysis.id, dataset.file_path)
     
     return analysis
+
+@router.get("/datasets/{dataset_id}/analyses", response_model=List[AnalysisResponse])
+def get_dataset_analyses(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all analyses for a specific dataset."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id, Dataset.owner_id == current_user.id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+        
+    analyses = db.query(AnalysisHistory).filter(AnalysisHistory.dataset_id == dataset.id).order_by(AnalysisHistory.created_at.desc()).all()
+    return analyses
+
+# ─── Chat ──────────────────────────────────────────────────────
+
+@router.post("/chat", response_model=ChatResponse)
+def chat_with_agent(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Chat with the AI Data Analyst."""
+    llm = get_llm()
+    if not llm:
+        raise HTTPException(status_code=500, detail="LLM provider is not configured properly. Check your .env file.")
+        
+    system_prompt_text = "You are an expert AI Data Analyst. You help the user understand their data, build machine learning models, and create visualizations."
+    
+    if request.dataset_id:
+        dataset = db.query(Dataset).filter(Dataset.id == request.dataset_id, Dataset.owner_id == current_user.id).first()
+        if dataset:
+            system_prompt_text += f"\n\nThe user is currently looking at a dataset named '{dataset.name}'. It has {dataset.row_count} rows and {dataset.column_count} columns."
+            if dataset.columns_metadata:
+                system_prompt_text += f"\nColumns metadata: {json.dumps(dataset.columns_metadata)}"
+                
+    system_prompt = SystemMessage(content=system_prompt_text)
+    human_prompt = HumanMessage(content=request.message)
+    
+    try:
+        response = llm.invoke([system_prompt, human_prompt])
+        return ChatResponse(
+            response=response.content,
+            session_id=request.session_id or str(uuid.uuid4())
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error communicating with LLM: {str(e)}")
 
 # ─── Visualizations ────────────────────────────────────────────
 

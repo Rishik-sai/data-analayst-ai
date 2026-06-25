@@ -1,12 +1,13 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  Database, 
-  MessageSquare, 
-  BarChart2, 
-  BrainCircuit, 
-  FileText, 
+import datamindLogo from '../assets/datamind-logo.png';
+import {
+  LayoutDashboard,
+  Database,
+  MessageSquare,
+  BarChart2,
+  BrainCircuit,
+  FileText,
   Settings,
   ChevronLeft,
   ChevronRight
@@ -33,23 +34,19 @@ export function Sidebar() {
     )}>
       <div className="p-4 flex items-center justify-between border-b border-border h-16">
         {isSidebarOpen && (
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-              <BrainCircuit className="w-5 h-5 text-primary-foreground" />
-            </div>
-            <span className="font-bold text-lg tracking-tight">DataMind</span>
+          <div className="flex items-center gap-2.5">
+            <img src={datamindLogo} alt="DataMind AI" className="w-8 h-8 object-contain rounded-md" />
+            <span className="font-bold text-lg tracking-tight bg-gradient-to-r from-[#3B82F6] to-[#10B981] bg-clip-text text-transparent">DataMind AI</span>
           </div>
         )}
         {!isSidebarOpen && (
           <div className="w-full flex justify-center">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-              <BrainCircuit className="w-5 h-5 text-primary-foreground" />
-            </div>
+            <img src={datamindLogo} alt="DataMind AI" className="w-8 h-8 object-contain rounded-md" />
           </div>
         )}
       </div>
 
-      <button 
+      <button
         onClick={toggleSidebar}
         className="absolute -right-3 top-20 bg-card border border-border rounded-full p-1 hover:bg-primary/20 transition-colors z-10"
       >
@@ -63,8 +60,8 @@ export function Sidebar() {
             to={item.path}
             className={({ isActive }) => clsx(
               "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors",
-              isActive 
-                ? "bg-primary/10 text-primary font-medium" 
+              isActive
+                ? "bg-primary/10 text-primary font-medium"
                 : "text-foreground/70 hover:bg-foreground/5 hover:text-foreground"
             )}
             title={!isSidebarOpen ? item.label : undefined}
@@ -80,8 +77,8 @@ export function Sidebar() {
           to="/settings"
           className={({ isActive }) => clsx(
             "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors",
-            isActive 
-              ? "bg-primary/10 text-primary font-medium" 
+            isActive
+              ? "bg-primary/10 text-primary font-medium"
               : "text-foreground/70 hover:bg-foreground/5 hover:text-foreground"
           )}
           title={!isSidebarOpen ? "Settings" : undefined}

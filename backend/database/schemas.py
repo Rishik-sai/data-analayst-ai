@@ -47,7 +47,7 @@ class DatasetResponse(BaseModel):
     file_size: Optional[int] = None
     row_count: Optional[int] = None
     column_count: Optional[int] = None
-    columns_metadata: Optional[Dict[str, Any]] = None
+    columns_metadata: Optional[List[Dict[str, Any]]] = None
     description: Optional[str] = None
     status: str
     created_at: datetime
@@ -151,3 +151,18 @@ class ReportResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+# ─── Dashboard ────────────────────────────────────────────────
+class DashboardStats(BaseModel):
+    total_datasets: int
+    analyses_run: int
+    models_trained: int
+    storage_used: str
+
+class RecentActivity(BaseModel):
+    id: str
+    activity_type: str  # e.g., 'dataset_uploaded', 'analysis_completed', 'model_trained'
+    description: str
+    status: str
+    created_at: datetime
+
