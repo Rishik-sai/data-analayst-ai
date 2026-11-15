@@ -29,11 +29,14 @@ from agents.tasks import (
 
 def get_llm():
     if settings.LLM_PROVIDER == "openai" and settings.OPENAI_API_KEY:
-        return ChatOpenAI(model=settings.LLM_MODEL, temperature=0.2, api_key=settings.OPENAI_API_KEY)
+        api_key = settings.OPENAI_API_KEY.strip("\"' ")
+        return ChatOpenAI(model=settings.LLM_MODEL, temperature=0.2, api_key=api_key)
     elif settings.LLM_PROVIDER == "groq" and settings.GROQ_API_KEY:
-        return ChatGroq(model=settings.LLM_MODEL, temperature=0.2, api_key=settings.GROQ_API_KEY)
+        api_key = settings.GROQ_API_KEY.strip("\"' ")
+        return ChatGroq(model=settings.LLM_MODEL, temperature=0.2, api_key=api_key)
     elif settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY:
-        return ChatAnthropic(model=settings.LLM_MODEL, temperature=0.2, api_key=settings.ANTHROPIC_API_KEY)
+        api_key = settings.ANTHROPIC_API_KEY.strip("\"' ")
+        return ChatAnthropic(model=settings.LLM_MODEL, temperature=0.2, api_key=api_key)
     
     # Fallback/default if API keys not set (for testing without calling real API)
     # In production, this should raise an error
