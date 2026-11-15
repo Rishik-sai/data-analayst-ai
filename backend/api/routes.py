@@ -106,8 +106,11 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(user_in: UserLogin, db: Session = Depends(get_db)):
-    """Authenticate a user and return a token."""
-    user = db.query(User).filter(User.email == user_in.email).first()
+    """Authenticate a user and return a token (accepts email or username, case-insensitive)."""
+    login_id = user_in.email.strip().lower()
+    user = db.query(User).filter(
+        (func.lower(User.email) == login_id) | (func.lower(User.username) == login_id)
+    ).first()
     if not user or not verify_password(user_in.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
         
