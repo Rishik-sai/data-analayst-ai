@@ -1,6 +1,7 @@
 import { fetchWithAuth, API_BASE_URL } from '../utils/apiClient';
 import React, { useEffect, useState, useRef } from 'react';
-import { UploadCloud, FileText, Database, Calendar, HardDrive, Trash2 } from 'lucide-react';
+import { UploadCloud, FileText, Database, Calendar, HardDrive, Trash2, MessageSquare } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 
 interface Dataset {
@@ -217,10 +218,19 @@ export function Datasets() {
 
       {activeDatasetId && (
         <div className="bg-card border border-border rounded-xl p-6 mt-8 shadow-sm">
-          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-            <Database className="w-5 h-5 text-primary" />
-            Dataset Preview
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <h2 className="text-xl font-bold flex items-center gap-2">
+              <Database className="w-5 h-5 text-primary" />
+              Dataset Preview
+            </h2>
+            <Link
+              to="/chat"
+              className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <MessageSquare className="w-4 h-4" />
+              Ask AI about this dataset
+            </Link>
+          </div>
           {isLoadingPreview ? (
             <div className="flex items-center justify-center p-12">
               <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>

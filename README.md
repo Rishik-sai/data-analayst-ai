@@ -60,6 +60,12 @@ The platform leverages a **multi-agent architecture** powered by CrewAI and Lang
 - Real-time upload progress tracking with status indicators
 
 ### 💬 AI Data Analyst Chat
+- Ask about an uploaded dataset and get **computed** answers with charts:
+  - *"Which model gives the highest accuracy?"* – cross-validated leaderboard of 8+ algorithms
+  - *"What are the unnecessary columns?"* – IDs, constants, duplicates, mostly-missing, free text, redundant columns
+  - *"What are the most important columns?"* – ranked feature importance for the target
+  - *"What are the relationships between columns?"* – correlations / Cramér's V / correlation ratio + heatmap
+  - *"Best model to predict `<column>`"* – choose any target column (auto-detected otherwise)
 - Conversational interface powered by LLMs (OpenAI / Groq / Anthropic)
 - Ask complex natural language questions about your dataset
 - Context-aware responses with persistent chat history per session
@@ -266,6 +272,12 @@ data-analayst-ai/
 git clone https://github.com/Rishik-sai/data-analayst-ai.git
 cd data-analayst-ai
 ```
+
+### ⚡ Windows quick start
+1. Install **Python 3.12** (tick *"Add python.exe to PATH"*) and **Node.js 20+**.
+2. Double-click **`setup-windows.bat`** (one time: creates `backend\venv`, installs packages, creates `backend\.env` with a local SQLite database).
+3. Double-click **`start-windows.bat`** – opens the backend (http://localhost:8000/docs) and frontend (http://localhost:5173).
+4. *(Optional)* add an LLM key to `backend\.env` for free-form chat. Dataset insight questions work without one.
 
 ### 2. Backend Setup
 ```bash

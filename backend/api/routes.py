@@ -23,6 +23,8 @@ from auth import get_current_user, hash_password, verify_password, create_access
 from config import settings
 from tools.analysis_tools import load_dataset, get_dataset_overview, clean_dataset, perform_eda, generate_chart_data, preprocess_for_visualization
 from tools.ml_tools import train_classification_model, train_regression_model, train_clustering_model, save_model
+from tools import insight_tools
+from tools.insight_tools import INSIGHT_TOOLS
 from agents.crew import AnalysisCrew, get_llm
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
@@ -116,6 +118,7 @@ def login(user_in: UserLogin, db: Session = Depends(get_db)):
 
 @router.post("/upload", response_model=DatasetResponse)
 async def upload_dataset(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -151,10 +154,20 @@ async def upload_dataset(
         db.add(dataset)
         db.commit()
         db.refresh(dataset)
+        # Pre-compute insights (best model, important/unnecessary columns, relationships)
+        # so the first chat question about this dataset answers instantly.
+        background_tasks.add_task(_warm_insights, file_path)
         return dataset
     except Exception as e:
         os.remove(file_path)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _warm_insights(file_path: str):
+    try:
+        insight_tools.dataset_insights(file_path)
+    except Exception:
+        pass  # best effort; chat recomputes on demand
 
 
 @router.get("/dashboard/stats", response_model=DashboardStats)
@@ -383,6 +396,53 @@ def get_dataset_analyses(
     analyses = db.query(AnalysisHistory).filter(AnalysisHistory.dataset_id == dataset.id).order_by(AnalysisHistory.created_at.desc()).all()
     return analyses
 
+# ─── Dataset Insights ──────────────────────────────────────────
+
+ALL_INSIGHT_SECTIONS = ["unnecessary", "important", "relationships", "models"]
+
+
+@router.get("/datasets/{dataset_id}/insights")
+def get_dataset_insights(
+    dataset_id: str,
+    target_column: str = None,
+    sections: str = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Best model leaderboard, unnecessary columns, important columns and column relationships.
+
+    `sections` is a comma separated subset of: unnecessary, important, relationships, models.
+    """
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id, Dataset.owner_id == current_user.id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    wanted = [x.strip() for x in sections.split(",")] if sections else ALL_INSIGHT_SECTIONS
+    wanted = [x for x in wanted if x in ALL_INSIGHT_SECTIONS] or ALL_INSIGHT_SECTIONS
+    try:
+        ins = insight_tools.dataset_insights(dataset.file_path, target_column, wanted)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Insight computation failed: {e}")
+    ins["markdown"] = insight_tools.format_insights_markdown(ins, dataset.name)
+    ins["charts"] = insight_tools.build_charts(ins)
+    return ins
+
+
+def _llm_commentary(llm, question: str, insights: dict, dataset_name: str) -> str:
+    """Ask the LLM for a short interpretation of already-computed insight numbers."""
+    prompt = (
+        "You are a senior data scientist. The user asked about their dataset "
+        f"'{dataset_name}': \"{question}\".\n\n"
+        "These results were already computed with scikit-learn cross-validation and statistics "
+        "(they are shown to the user as tables, do NOT repeat the tables):\n"
+        f"{json.dumps(insight_tools.summarize_for_llm(insights), default=str)[:12000]}\n\n"
+        "Write 3-6 concise markdown bullet points that interpret these results: why the best model "
+        "likely wins, what the important columns and relationships mean in plain business terms, "
+        "any risks (class imbalance, leakage, small data, columns that look like the target), and a "
+        "concrete next step. Only use numbers that appear in the results above."
+    )
+    return llm.invoke([HumanMessage(content=prompt)]).content
+
+
 # ─── Chat ──────────────────────────────────────────────────────
 
 @router.post("/chat", response_model=ChatResponse)
@@ -391,27 +451,76 @@ def chat_with_agent(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Chat with the AI Data Analyst."""
+    """Chat with the AI Data Analyst.
+
+    Questions about the best model / unnecessary columns / important columns / relationships
+    are answered with real computations (see tools/insight_tools.py) plus charts; the LLM,
+    when configured, adds commentary. Everything else goes to the LangGraph agent.
+    """
     llm = get_llm()
-    if not llm:
-        raise HTTPException(status_code=500, detail="LLM provider is not configured properly. Check your .env file.")
-        
-    dataset_name = None
-    dataset_file_path = None
-    dataset_rows = 0
-    dataset_cols = 0
-    columns_metadata = None
-    
+
+    dataset = None
     if request.dataset_id:
         dataset = db.query(Dataset).filter(Dataset.id == request.dataset_id, Dataset.owner_id == current_user.id).first()
-        if dataset:
-            dataset_name = dataset.name
-            dataset_file_path = dataset.file_path
-            dataset_rows = dataset.row_count
-            dataset_cols = dataset.column_count
-            columns_metadata = dataset.columns_metadata
-                
+
     session_id = request.session_id or str(uuid.uuid4())
+
+    def save_message(role: str, content: str):
+        db.add(ChatHistory(
+            session_id=session_id,
+            user_id=current_user.id,
+            dataset_id=dataset.id if dataset else None,
+            role=role,
+            content=content
+        ))
+        db.commit()
+
+    # ── 1. Dataset insight questions: computed answers ──
+    intents = insight_tools.detect_intents(request.message) if dataset else []
+    if dataset and intents:
+        try:
+            columns = [c["name"] for c in (dataset.columns_metadata or [])]
+            target = request.target_column or insight_tools.find_target_in_message(request.message, columns)
+            ins = insight_tools.dataset_insights(dataset.file_path, target, intents)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Could not analyse the dataset: {e}")
+
+        answer = insight_tools.format_insights_markdown(ins, dataset.name)
+        if llm:
+            try:
+                notes = _llm_commentary(llm, request.message, ins, dataset.name)
+                if notes:
+                    answer += "\n\n## 💡 Analyst notes\n" + notes
+            except Exception:
+                pass  # computed answer is still complete without commentary
+
+        save_message("user", request.message)
+        save_message("assistant", answer)
+        return ChatResponse(
+            response=answer,
+            session_id=session_id,
+            charts=insight_tools.build_charts(ins),
+            metadata={"intents": intents, "target": ins.get("target"), "problem_type": ins.get("problem_type")},
+        )
+
+    # ── 2. General questions: LLM agent ──
+    if not llm:
+        if dataset:
+            hint = ("I can answer these without an LLM key:\n"
+                    "- *Which model gives the highest accuracy?*\n"
+                    "- *What are the unnecessary columns?*\n"
+                    "- *What are the most important columns?*\n"
+                    "- *What are the relationships between columns?*\n"
+                    "- *Analyze this dataset* (all of the above)\n\n"
+                    "For free-form questions, set an LLM API key in the backend `.env`.")
+            return ChatResponse(response=hint, session_id=session_id)
+        raise HTTPException(status_code=500, detail="LLM provider is not configured properly. Check your .env file.")
+
+    dataset_name = dataset.name if dataset else None
+    dataset_file_path = dataset.file_path if dataset else None
+    dataset_rows = dataset.row_count if dataset else 0
+    dataset_cols = dataset.column_count if dataset else 0
+    columns_metadata = dataset.columns_metadata if dataset else None
 
     # Fetch history
     history_records = db.query(ChatHistory).filter(
@@ -429,16 +538,16 @@ def chat_with_agent(
     # Add tools for the agent
     from langchain_community.tools.ddg_search import DuckDuckGoSearchRun
     search_tool = DuckDuckGoSearchRun()
-    
+
     tools = [
-        load_dataset, get_dataset_overview, clean_dataset, perform_eda, 
+        load_dataset, get_dataset_overview, clean_dataset, perform_eda,
         preprocess_for_visualization, generate_chart_data,
-        train_classification_model, train_regression_model, 
-        train_clustering_model, save_model, search_tool
+        train_classification_model, train_regression_model,
+        train_clustering_model, save_model, search_tool, *INSIGHT_TOOLS
     ]
 
     from agents.chat_agent import build_chat_agent
-    
+
     agent_executor = build_chat_agent(
         llm=llm,
         tools=tools,
@@ -450,16 +559,7 @@ def chat_with_agent(
     )
 
     try:
-        # Save user message
-        db_user_msg = ChatHistory(
-            session_id=session_id,
-            user_id=current_user.id,
-            dataset_id=request.dataset_id,
-            role="user",
-            content=request.message
-        )
-        db.add(db_user_msg)
-        db.commit()
+        save_message("user", request.message)
 
         # Run agent
         result = agent_executor.invoke({
@@ -467,16 +567,7 @@ def chat_with_agent(
         })
         final_response = result["messages"][-1].content
 
-        # Save AI message
-        db_ai_msg = ChatHistory(
-            session_id=session_id,
-            user_id=current_user.id,
-            dataset_id=request.dataset_id,
-            role="assistant",
-            content=final_response
-        )
-        db.add(db_ai_msg)
-        db.commit()
+        save_message("assistant", final_response)
 
         return ChatResponse(
             response=final_response,

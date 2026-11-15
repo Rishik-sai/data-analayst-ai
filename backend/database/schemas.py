@@ -98,6 +98,7 @@ class ChatRequest(BaseModel):
     message: str
     dataset_id: Optional[str] = None
     session_id: Optional[str] = None
+    target_column: Optional[str] = None  # column to predict; auto-detected when empty
 
 
 class ChatResponse(BaseModel):

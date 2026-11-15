@@ -10,6 +10,7 @@ from typing import Optional
 class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql://datamind:datamind_password@localhost:5432/datamind_db"
+    REDIS_URL: Optional[str] = "redis://localhost:6379/0"
 
     # LLM Configuration
     OPENAI_API_KEY: Optional[str] = None
@@ -28,8 +29,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
     class Config:
-        env_file = ".env"
+        # Absolute path so the app finds backend/.env no matter which folder it is started from
+        env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+        env_file_encoding = "utf-8"
         case_sensitive = True
+        extra = "ignore"
 
 
 settings = Settings()
