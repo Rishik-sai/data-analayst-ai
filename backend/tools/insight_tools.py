@@ -35,7 +35,7 @@ from sklearn.feature_selection import mutual_info_classif, mutual_info_regressio
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
 from sklearn.model_selection import KFold, StratifiedKFold, cross_validate
-from sklearn.naive_bayes import GaussianNB
+from sklearn.naive_bayes import GaussianNB, MultinomialNB
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
@@ -462,7 +462,13 @@ def _preprocessor(X: pd.DataFrame, dense_for_nb: bool = False) -> ColumnTransfor
 
 def compare_models(df: pd.DataFrame, target: str, exclude: Optional[List[str]] = None,
                    problem_type: Optional[str] = None) -> Dict[str, Any]:
-    """Cross-validate several algorithms and return a leaderboard."""
+    """Cross-validate several algorithms and return a leaderboard.
+
+    If all structured features are excluded but free-text columns exist,
+    automatically builds TF-IDF features from them (NLP mode).
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
     df = df.dropna(subset=[target])
     problem_type = problem_type or detect_problem_type(df[target])
     X_all = _feature_frame(df, target, exclude or [])
@@ -470,16 +476,22 @@ def compare_models(df: pd.DataFrame, target: str, exclude: Optional[List[str]] =
     for c in X_all.columns:
         if not _is_numeric(X_all[c]):
             X_all[c] = X_all[c].astype(str).where(X_all[c].notna(), np.nan)
+
+    use_tfidf = False
+    text_cols_used: list = []
     if X_all.shape[1] == 0:
-        text_cols = [c for c in (exclude or []) if c in df.columns and _is_free_text(df[c])
-                     and df[c].astype(str).str.len().mean() > 30]
-        hint = (f" `{text_cols[0]}` looks like free text (e.g. messages/reviews) – that needs NLP "
-                f"features such as TF-IDF before standard models can use it.") if text_cols else ""
-        return {"error": "No usable feature columns left after removing unnecessary columns." + hint}
+        # Try free-text columns via TF-IDF
+        text_cols = [c for c in (exclude or []) if c in df.columns and _is_free_text(df[c])]
+        if not text_cols:
+            return {"error": "No usable feature columns left after removing unnecessary columns."}
+        # Combine all text columns into one
+        text_cols_used = text_cols
+        combined = df[text_cols].fillna("").astype(str).agg(" ".join, axis=1)
+        X_all = pd.DataFrame({"__text__": combined}, index=df.index)
+        use_tfidf = True
 
     y_all = df[target]
     if problem_type == "classification":
-        y_all = pd.Series(pd.factorize(y_all.astype(str))[0], index=y_all.index)
         class_counts = y_all.value_counts()
         # Drop classes too rare to cross-validate
         y_all = y_all[y_all.isin(class_counts[class_counts >= 2].index)]
@@ -513,10 +525,27 @@ def compare_models(df: pd.DataFrame, target: str, exclude: Optional[List[str]] =
         if is_slow and len(X) > MAX_ROWS_FOR_SLOW_MODELS:
             sidx = _sample(X, MAX_ROWS_FOR_SLOW_MODELS).index
             Xm, ym = X.loc[sidx], y.loc[sidx]
-        pipe = Pipeline([("prep", _preprocessor(Xm)), ("model", est)])
+
+        # Build the right pipeline depending on whether we are in NLP or structured mode
+        if use_tfidf:
+            # Naive Bayes doesn't play nicely with TF-IDF after scaling; keep it
+            # but skip SVM/KNN for large text datasets (too slow)
+            if name in ("SVM (RBF)", "SVR (RBF)", "K-Nearest Neighbors") and len(Xm) > 1000:
+                continue
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            tfidf = TfidfVectorizer(max_features=5000, sublinear_tf=True,
+                                    strip_accents="unicode", analyzer="word")
+            pipe = Pipeline([("tfidf", tfidf), ("model", est)])
+            Xm_input = Xm["__text__"].fillna("").astype(str)
+            ym_input = ym
+        else:
+            pipe = Pipeline([("prep", _preprocessor(Xm)), ("model", est)])
+            Xm_input = Xm
+            ym_input = ym
+
         start = time.time()
         try:
-            res = cross_validate(pipe, Xm, ym, cv=cv, scoring=scoring, error_score="raise")
+            res = cross_validate(pipe, Xm_input, ym_input, cv=cv, scoring=scoring, error_score="raise")
         except Exception as e:
             leaderboard.append({"model": name, "error": str(e)[:200]})
             continue
@@ -546,7 +575,8 @@ def compare_models(df: pd.DataFrame, target: str, exclude: Optional[List[str]] =
         "cv_folds": folds,
         "rows": int(len(y_all)),
         "rows_used": int(len(y)),
-        "features_used": X.columns.tolist(),
+        "features_used": text_cols_used if use_tfidf else X.columns.tolist(),
+        "nlp_mode": use_tfidf,
         "n_classes": n_classes or None,
         "baseline": {"score": baseline, "description": baseline_desc},
         "best_model": ok[0] if ok else None,
@@ -659,6 +689,11 @@ def format_insights_markdown(ins: Dict[str, Any], dataset_name: str = "your data
             lines.append(f"⚠️ {m['error']}")
         elif m.get("best_model"):
             best = m["best_model"]
+            # Show NLP mode note if applicable
+            if m.get("nlp_mode"):
+                feats = ", ".join(f"`{c}`" for c in m.get("features_used", []))
+                lines.append(f"_📝 NLP mode: no structured features found. Used **TF-IDF vectorization** on {feats} to train models._")
+                lines.append("")
             if m["problem_type"] == "classification":
                 lines.append(f"**{best['model']}** gets the highest accuracy: **{_pct(best['accuracy'])}** "
                              f"(± {best['accuracy_std'] * 100:.1f}%, {m['cv_folds']}-fold cross-validation). "
