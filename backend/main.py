@@ -36,4 +36,4 @@ app.include_router(api_router, prefix="/api")
 @app.get("/")
 def read_root():
     return {"message": "Welcome to DataMind AI API"}
-# trigger reload
+# trigger reload for .env

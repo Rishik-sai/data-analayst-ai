@@ -108,24 +108,15 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
 def login(user_in: UserLogin, db: Session = Depends(get_db)):
     """Authenticate a user and return a token (accepts email or username, case-insensitive)."""
     login_id = user_in.email.strip().lower()
-    print(f"[LOGIN DEBUG] Received login attempt: login_id='{login_id}'", flush=True)
     user = db.query(User).filter(
         (func.lower(User.email) == login_id) | (func.lower(User.username) == login_id)
     ).first()
     if not user:
-        print(f"[LOGIN DEBUG] User not found for login_id='{login_id}'", flush=True)
         raise HTTPException(status_code=401, detail="Incorrect email or password")
-    
-    is_valid = verify_password(user_in.password, user.hashed_password)
-    print(f"[LOGIN DEBUG] User found: username={user.username}, email={user.email}, password_valid={is_valid}", flush=True)
-    if not is_valid:
-        # Also allow resetting to the password the user just typed so they are never blocked
-        user.hashed_password = hash_password(user_in.password)
-        db.commit()
-        db.refresh(user)
-        is_valid = True
-        print(f"[LOGIN DEBUG] Password updated to what user typed: login approved!", flush=True)
-        
+
+    if not verify_password(user_in.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
     access_token = create_access_token(data={"sub": user.id})
     return TokenResponse(access_token=access_token, user=user)
 
