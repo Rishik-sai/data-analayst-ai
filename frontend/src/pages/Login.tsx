@@ -7,6 +7,7 @@ import { useStore } from '../store/useStore';
 export function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
@@ -31,7 +32,7 @@ export function Login() {
       }
 
       const data = await res.json();
-      setAuth(data.user, data.access_token);
+      setAuth(data.user, data.access_token, rememberMe);
       navigate('/');
     } catch (err: any) {
       setError(err.message);
@@ -70,18 +71,18 @@ export function Login() {
             )}
 
             <div className="space-y-1">
-              <label className="text-sm font-medium text-foreground/80 pl-1">Email</label>
+              <label className="text-sm font-medium text-foreground/80 pl-1">Email or Username</label>
               <div className="relative group">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-foreground/40 group-focus-within:text-primary transition-colors">
                   <Mail className="h-5 w-5" />
                 </div>
                 <input
-                  type="email"
+                  type="text"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full bg-secondary/50 border border-border rounded-xl pl-11 pr-4 py-3 outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all text-sm"
-                  placeholder="name@example.com"
+                  placeholder="name@example.com or username"
                 />
               </div>
             </div>
@@ -104,6 +105,18 @@ export function Login() {
                   placeholder="••••••••"
                 />
               </div>
+            </div>
+
+            <div className="flex items-center justify-between px-1 text-sm">
+              <label className="flex items-center gap-2 cursor-pointer select-none text-foreground/70 hover:text-foreground">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="w-4 h-4 rounded border-border text-primary focus:ring-primary/40 rounded-sm"
+                />
+                <span>Remember me on this device</span>
+              </label>
             </div>
 
             <button

@@ -11,7 +11,7 @@ import json
 
 from sqlalchemy import func
 from database.session import get_db
-from database.models import User, Dataset, AnalysisHistory, ChatHistory, MLModel
+from database.models import User, Dataset, AnalysisHistory, ChatHistory, MLModel, Report
 from database.schemas import (
     DatasetResponse, DatasetPreview, AnalyzeRequest, AnalysisResponse,
     ChatRequest, ChatResponse, VisualizeRequest, VisualizationResponse,

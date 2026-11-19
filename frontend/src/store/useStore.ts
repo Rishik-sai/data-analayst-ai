@@ -19,7 +19,7 @@ interface AppState {
   datasets: Dataset[];
   activeDatasetId: string | null;
   setUser: (user: User | null) => void;
-  setAuth: (user: User | null, token: string | null) => void;
+  setAuth: (user: User | null, token: string | null, rememberMe?: boolean) => void;
   logout: () => void;
   setDatasets: (datasets: Dataset[]) => void;
   setActiveDatasetId: (id: string | null) => void;
@@ -46,22 +46,38 @@ const applyTheme = (theme: 'light' | 'dark' | 'system') => {
 const savedTheme = (localStorage.getItem('app-theme') as 'light' | 'dark' | 'system') || 'system';
 applyTheme(savedTheme);
 
+// Helper to read initial token:
+// Checks sessionStorage first (per-session), then localStorage ONLY if user explicitly chose "remember-me"
+const getInitialToken = (): string | null => {
+  const sessionTok = sessionStorage.getItem('datamind-token');
+  if (sessionTok) return sessionTok;
+  return localStorage.getItem('datamind-token');
+};
+
 export const useStore = create<AppState>((set) => ({
   user: null,
-  token: localStorage.getItem('datamind-token'),
+  token: getInitialToken(),
   datasets: [],
   activeDatasetId: null,
   setUser: (user) => set({ user }),
-  setAuth: (user, token) => {
+  setAuth: (user, token, rememberMe = false) => {
     if (token) {
-      localStorage.setItem('datamind-token', token);
+      if (rememberMe) {
+        localStorage.setItem('datamind-token', token);
+        sessionStorage.removeItem('datamind-token');
+      } else {
+        sessionStorage.setItem('datamind-token', token);
+        localStorage.removeItem('datamind-token');
+      }
     } else {
       localStorage.removeItem('datamind-token');
+      sessionStorage.removeItem('datamind-token');
     }
     set({ user, token });
   },
   logout: () => {
     localStorage.removeItem('datamind-token');
+    sessionStorage.removeItem('datamind-token');
     set({ user: null, token: null, datasets: [], activeDatasetId: null });
   },
   setDatasets: (datasets) => set({ datasets }),

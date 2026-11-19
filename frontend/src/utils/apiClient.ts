@@ -17,8 +17,21 @@ export const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
     headers.delete('Content-Type');
   }
 
-  return fetch(url, {
+  const response = await fetch(url, {
     ...options,
     headers,
   });
+
+  // Global Edge Case: Token expired or rejected by server
+  if (response.status === 401) {
+    const isAuthRoute = url.includes('/api/login') || url.includes('/api/register');
+    if (!isAuthRoute) {
+      useStore.getState().logout();
+      if (window.location.pathname !== '/login' && window.location.pathname !== '/register') {
+        window.location.href = '/login';
+      }
+    }
+  }
+
+  return response;
 };

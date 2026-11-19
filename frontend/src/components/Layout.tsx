@@ -9,6 +9,8 @@ export function Layout() {
   const token = useStore(state => state.token);
   const setUser = useStore(state => state.setUser);
 
+  const logout = useStore(state => state.logout);
+
   useEffect(() => {
     if (token && !user) {
       fetchWithAuth(`${API_BASE_URL}/api/users/me`)
@@ -17,12 +19,14 @@ export function Layout() {
           throw new Error('Failed to fetch user');
         })
         .then(data => {
-          console.log('Fetched user data:', data);
           setUser(data);
         })
-        .catch(err => console.error('Layout user fetch error:', err));
+        .catch(err => {
+          console.error('Layout user fetch error:', err);
+          logout();
+        });
     }
-  }, [token, user, setUser]);
+  }, [token, user, setUser, logout]);
 
   const initial = user?.username ? user.username.charAt(0).toUpperCase() : '?';
   const displayName = user?.username || 'Loading...';
